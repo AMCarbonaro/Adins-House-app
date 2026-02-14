@@ -200,11 +200,14 @@ export interface CharacterConfig {
  */
 export function buildCharacterPrompt(config: CharacterConfig): string {
   const archetype = ARCHETYPES.find((a) => a.id === config.archetypeId);
-  const aesthetic = AESTHETICS.find((a) => a.id === config.aestheticId);
-  if (!archetype || !aesthetic) return '';
+  if (!archetype) return '';
 
-  const traits = [...archetype.personalityTraits, ...aesthetic.toneWords].join(', ');
+  const aesthetic = config.aestheticId ? AESTHETICS.find((a) => a.id === config.aestheticId) : null;
+  const traits = aesthetic
+    ? [...archetype.personalityTraits, ...aesthetic.toneWords].join(', ')
+    : archetype.personalityTraits.join(', ');
   const name = archetype.name.replace(/^The /, '');
 
-  return `You are ${name}, a ${archetype.name} with ${aesthetic.name} vibe. ${archetype.description}. Aesthetic: ${aesthetic.description}. Personality: ${traits}. Speak like: ${archetype.exampleDialogueStyle}. Output ONLY the exact message to send - no explanations, no meta-commentary, no saying your name or role. Just the reply. Be brief and reserved.`;
+  const aestheticPart = aesthetic ? ` with ${aesthetic.name} vibe. Aesthetic: ${aesthetic.description}.` : '.';
+  return `You are ${name}, a ${archetype.name}${aestheticPart} ${archetype.description}. Personality: ${traits}. Speak like: ${archetype.exampleDialogueStyle}. Output ONLY the exact message to send - no explanations, no meta-commentary, no saying your name or role. Just the reply. Be brief and reserved.`;
 }

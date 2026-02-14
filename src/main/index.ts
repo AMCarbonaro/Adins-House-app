@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { botState } from './bot-state';
 import { startBot, stopBot, resetPreload } from './bot';
+import fs from 'fs';
 import {
   getCharacterData as getStoredCharacterData,
   setCharacterData as setStoredCharacterData,
@@ -158,6 +159,14 @@ function setSnapchatViewBounds(
 }
 
 app.whenReady().then(() => {
+  // Load persisted API key
+  try {
+    const keyPath = path.join(app.getPath('userData'), 'groq-key.txt');
+    if (fs.existsSync(keyPath)) {
+      botState.groqApiKey = fs.readFileSync(keyPath, 'utf-8').trim();
+    }
+  } catch {}
+
   ipcMain.handle('bot:getState', () => ({
     enabled: botState.enabled,
     selectedChats: botState.selectedChats,
@@ -166,6 +175,7 @@ app.whenReady().then(() => {
     characterConfig: botState.characterConfig,
     characterEnabled: botState.characterEnabled,
     selectors: botState.selectors,
+    groqApiKey: botState.groqApiKey,
   }));
 
   ipcMain.handle('bot:getArchetypes', () => ARCHETYPES);
@@ -224,8 +234,17 @@ app.whenReady().then(() => {
         characterConfig?: typeof botState.characterConfig;
         characterEnabled?: boolean;
         selectors?: typeof botState.selectors;
+        groqApiKey?: string;
       }
     ) => {
+      if (patch.groqApiKey !== undefined) {
+        botState.groqApiKey = patch.groqApiKey;
+        // Persist to disk
+        try {
+          const keyPath = path.join(app.getPath('userData'), 'groq-key.txt');
+          fs.writeFileSync(keyPath, patch.groqApiKey, 'utf-8');
+        } catch {}
+      }
       if (patch.enabled !== undefined) botState.enabled = patch.enabled;
       if (patch.selectedChats) {
         botState.selectedChats = patch.selectedChats;
@@ -250,9 +269,17 @@ app.whenReady().then(() => {
     return snapchatView.webContents.executeJavaScript(`
 (function() {
   try {
-    var vList = document.querySelector('.ReactVirtualized__Grid.ReactVirtualized__List')
-              || document.querySelector('[role="list"]');
-    if (!vList) return { ok: false, error: 'no list element found', tried: ['.ReactVirtualized__Grid.ReactVirtualized__List', '[role="list"]'] };
+    var feed = document.querySelector('div[aria-label="Friends Feed"]');
+    var listSel = '.ReactVirtualized__Grid.ReactVirtualized__List, .ReactVirtualized_Grid.ReactVirtualized_List, [role="list"]';
+    var parts = listSel.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    var vList = null;
+    if (feed) {
+      for (var i = 0; i < parts.length; i++) { vList = feed.querySelector(parts[i]); if (vList) break; }
+    }
+    if (!vList) {
+      for (var j = 0; j < parts.length; j++) { vList = document.querySelector(parts[j]); if (vList) break; }
+    }
+    if (!vList) return { ok: false, error: 'no list element found', tried: ['Friends Feed + ' + listSel] };
     var items = vList.querySelectorAll('[role="listitem"]');
     var totalListitems = items.length;
     var details = [];
@@ -330,6 +357,61 @@ app.whenReady().then(() => {
     results.url = window.location.href;
     return results;
   } catch(e) { return { error: e.message }; }
+})();
+    `);
+  });
+
+  ipcMain.handle('bot:checkSelectors', async () => {
+    if (!snapchatView || snapchatView.webContents.isDestroyed()) return { error: 'no view' };
+    const s = botState.selectors;
+    const chatListParts = (s.chatList || 'div[aria-label="Friends Feed"],[role="list"]').split(',').map((x) => x.trim()).filter(Boolean);
+    const chatItem = s.chatItem || '[role="listitem"]';
+    const inputParts = (s.inputBox || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const sendParts = (s.sendButton || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const portal = s.portal || '#portal-container';
+    const searchParts = (s.searchInput || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const msgListParts = (s.messageList || 'ul.ujRzj').split(',').map((x) => x.trim()).filter(Boolean);
+    const payload = {
+      chatListParts,
+      chatItem,
+      inputParts,
+      sendParts,
+      portal,
+      searchParts,
+      msgListParts,
+    };
+    const payloadStr = JSON.stringify(payload);
+    return snapchatView.webContents.executeJavaScript(`
+(function() {
+  try {
+    var p = JSON.parse(${JSON.stringify(payloadStr)});
+    var root = document.querySelector(p.portal) || document.body;
+    var list = null;
+    for (var i = 0; i < p.chatListParts.length; i++) {
+      list = document.querySelector(p.chatListParts[i]);
+      if (list) break;
+    }
+    var chatList = !!list;
+    var chatItemCount = list ? list.querySelectorAll(p.chatItem).length : 0;
+    var input = false;
+    for (var j = 0; j < p.inputParts.length; j++) {
+      if (root.querySelector(p.inputParts[j]) || document.querySelector(p.inputParts[j])) { input = true; break; }
+    }
+    var send = false;
+    for (var k = 0; k < p.sendParts.length; k++) {
+      if (root.querySelector(p.sendParts[k]) || document.querySelector(p.sendParts[k])) { send = true; break; }
+    }
+    var search = false;
+    for (var q = 0; q < p.searchParts.length; q++) {
+      if (document.querySelector(p.searchParts[q])) { search = true; break; }
+    }
+    var messageList = false;
+    for (var m = 0; m < p.msgListParts.length; m++) {
+      if (document.querySelector(p.msgListParts[m])) { messageList = true; break; }
+    }
+    if (!messageList) messageList = document.querySelectorAll('ul').length > 0;
+    return { ok: true, chatList, chatItemCount, input, send, search, messageList };
+  } catch (e) { return { ok: false, error: e.message }; }
 })();
     `);
   });

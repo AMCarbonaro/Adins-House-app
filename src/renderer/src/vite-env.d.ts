@@ -49,6 +49,10 @@ interface BotControlAPI {
   getAesthetics: () => Promise<AestheticOption[]>;
   getExampleCharacters: () => Promise<{ name: string; description: string; archetypeId: string; aestheticId: string }[]>;
   getCharacterConfig: (userId: string | null) => Promise<{ config: CharacterConfig | null; enabled: boolean }>;
+  checkSelectors: () => Promise<
+    | { ok: true; chatList: boolean; chatItemCount: number; input: boolean; send: boolean; search: boolean; messageList: boolean }
+    | { error: string }
+  >;
   setCharacterConfig: (
     userId: string | null,
     config: CharacterConfig | null,

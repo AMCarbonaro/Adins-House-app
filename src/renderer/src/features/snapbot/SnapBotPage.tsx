@@ -15,13 +15,18 @@ export function SnapBotPage() {
   const [from, setFrom] = useState(1);
   const [to, setTo] = useState(100);
   const [archetypes, setArchetypes] = useState<{ id: string; name: string; description: string }[]>([]);
-  const [aesthetics, setAesthetics] = useState<{ id: string; name: string; description: string }[]>([]);
-  const [examples, setExamples] = useState<{ name: string; description: string; archetypeId: string; aestheticId: string }[]>([]);
   const [archetypeId, setArchetypeId] = useState<string>('');
-  const [aestheticId, setAestheticId] = useState<string>('');
   const [characterEnabled, setCharacterEnabled] = useState(false);
   const [characterUpdated, setCharacterUpdated] = useState(false);
   const [rangeSaved, setRangeSaved] = useState(false);
+  const [selectorCheck, setSelectorCheck] = useState<{
+    chatList: boolean;
+    chatItemCount: number;
+    input: boolean;
+    send: boolean;
+    search: boolean;
+    messageList: boolean;
+  } | null>(null);
 
   useEffect(() => {
     if (!isElectron || !window.snapbot) return;
@@ -66,34 +71,13 @@ export function SnapBotPage() {
         setFrom(s.selectedChats.from ?? 1);
         setTo(s.selectedChats.to ?? 100);
       }
-      if (s.characterConfig) {
-        setArchetypeId(s.characterConfig.archetypeId);
-        setAestheticId(s.characterConfig.aestheticId);
-      }
+      if (s.characterConfig) setArchetypeId(s.characterConfig.archetypeId);
       if (s.characterEnabled !== undefined) setCharacterEnabled(s.characterEnabled);
     };
 
     const loadCharacterOptions = async () => {
-      const [arch, aest, ex] = await Promise.all([
-        window.botControl!.getArchetypes(),
-        window.botControl!.getAesthetics(),
-        window.botControl!.getExampleCharacters(),
-      ]);
+      const arch = await window.botControl!.getArchetypes();
       setArchetypes(arch);
-      setAesthetics(aest);
-      setExamples(ex);
-    };
-
-    const loadCharacterConfig = async () => {
-      const { config: cfg, enabled } = await window.botControl!.getCharacterConfig(user?.id ?? null);
-      if (cfg) {
-        setArchetypeId(cfg.archetypeId);
-        setAestheticId(cfg.aestheticId);
-      }
-      setCharacterEnabled(enabled ?? false);
-      if (cfg || enabled !== undefined) {
-        await window.botControl!.setCharacterConfig(user?.id ?? null, cfg ?? null, enabled);
-      }
     };
 
     const refreshStatus = async () => {
@@ -103,7 +87,6 @@ export function SnapBotPage() {
 
     loadState();
     loadCharacterOptions();
-    loadCharacterConfig();
     refreshStatus();
     const interval = setInterval(refreshStatus, 3000);
     return () => clearInterval(interval);
@@ -125,46 +108,24 @@ export function SnapBotPage() {
     setTimeout(() => setRangeSaved(false), 2000);
   };
 
-  const showCharacterUpdated = () => {
+  const handleCharacterToggle = async () => {
+    if (!window.botControl) return;
+    const next = !characterEnabled;
+    const config = archetypeId ? { archetypeId, aestheticId: '' } : null;
+    await window.botControl.setState({ characterEnabled: next, characterConfig: next ? config : null });
+    setCharacterEnabled(next);
     setCharacterUpdated(true);
     setTimeout(() => setCharacterUpdated(false), 2000);
   };
 
-  const handleCharacterToggle = async () => {
-    if (!window.botControl) return;
-    const next = !characterEnabled;
-    const config = archetypeId && aestheticId ? { archetypeId, aestheticId } : null;
-    await window.botControl.setState({ characterEnabled: next });
-    await window.botControl.setCharacterConfig(user?.id ?? null, next ? config : null, next);
-    setCharacterEnabled(next);
-    showCharacterUpdated();
-  };
-
-  const handleArchetypeOrAestheticChange = async (newArchetypeId?: string, newAestheticId?: string) => {
+  const handleArchetypeChange = async (newId: string) => {
+    setArchetypeId(newId);
     if (!window.botControl || !characterEnabled) return;
-    const arch = newArchetypeId !== undefined ? newArchetypeId : archetypeId;
-    const aest = newAestheticId !== undefined ? newAestheticId : aestheticId;
-    const config = arch && aest ? { archetypeId: arch, aestheticId: aest } : null;
-    await window.botControl.setCharacterConfig(user?.id ?? null, config, true);
+    const config = newId ? { archetypeId: newId, aestheticId: '' } : null;
     await window.botControl.setState({ characterConfig: config, characterEnabled: true });
-    showCharacterUpdated();
+    setCharacterUpdated(true);
+    setTimeout(() => setCharacterUpdated(false), 2000);
   };
-
-  const handlePickExample = async (ex: { archetypeId: string; aestheticId: string }) => {
-    setArchetypeId(ex.archetypeId);
-    setAestheticId(ex.aestheticId);
-    if (window.botControl) {
-      await window.botControl.setCharacterConfig(user?.id ?? null, {
-        archetypeId: ex.archetypeId,
-        aestheticId: ex.aestheticId,
-      }, true);
-      await window.botControl.setState({ characterConfig: { archetypeId: ex.archetypeId, aestheticId: ex.aestheticId }, characterEnabled: true });
-      setCharacterEnabled(true);
-      showCharacterUpdated();
-    }
-  };
-
-  const hasCharacterSelection = archetypeId && aestheticId;
 
   if (!isElectron) {
     return (
@@ -253,53 +214,18 @@ export function SnapBotPage() {
 
         <div className="mb-5">
           <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-            Character & aesthetic
+            Character
           </label>
           <p className="text-xs text-gray-500 mb-2">
-            Pick an archetype and aesthetic. Toggle on to use your character. Either way, replies stay reserved and brief.
+            Pick a character for the bot's personality. Replies always stay reserved and brief.
           </p>
-          {examples.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-3">
-              {examples.map((ex) => (
-                <button
-                  key={ex.name}
-                  type="button"
-                  onClick={() => handlePickExample(ex)}
-                  title={ex.description}
-                  className="px-2.5 py-1.5 rounded-lg bg-surface-700 hover:bg-surface-600 text-gray-300 text-xs font-medium transition"
-                >
-                  {ex.name}
-                </button>
-              ))}
-            </div>
-          )}
           <select
             value={archetypeId}
-            onChange={(e) => {
-              const v = e.target.value;
-              setArchetypeId(v);
-              handleArchetypeOrAestheticChange(v, undefined);
-            }}
-            className="w-full px-4 py-3 rounded-lg mb-2 bg-surface-800 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-brand-500/50 text-sm"
-          >
-            <option value="">— Archetype —</option>
-            {archetypes.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={aestheticId}
-            onChange={(e) => {
-              const v = e.target.value;
-              setAestheticId(v);
-              handleArchetypeOrAestheticChange(undefined, v);
-            }}
+            onChange={(e) => handleArchetypeChange(e.target.value)}
             className="w-full px-4 py-3 rounded-lg mb-3 bg-surface-800 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-brand-500/50 text-sm"
           >
-            <option value="">— Aesthetic —</option>
-            {aesthetics.map((a) => (
+            <option value="">— Select Character —</option>
+            {archetypes.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
               </option>
@@ -338,9 +264,9 @@ export function SnapBotPage() {
           {characterUpdated && (
             <p className="text-xs text-green-400 font-medium animate-pulse">Updated</p>
           )}
-          {hasCharacterSelection && characterEnabled && (
+          {archetypeId && characterEnabled && (
             <p className="mt-1 text-xs text-gray-500">
-              {archetypes.find((a) => a.id === archetypeId)?.name} + {aesthetics.find((a) => a.id === aestheticId)?.name}
+              {archetypes.find((a) => a.id === archetypeId)?.name}
             </p>
           )}
         </div>
@@ -351,13 +277,80 @@ export function SnapBotPage() {
           conversations load—then the bot can recognize and reply to them.
         </div>
 
+        <div className="mb-5">
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+            Selector check
+          </label>
+          <p className="text-xs text-gray-500 mb-2">
+            See if the bot can find chat list, input, and send button on the current page.
+          </p>
+          <button
+            type="button"
+            onClick={async () => {
+              const result = await window.botControl?.checkSelectors?.();
+              if (result && 'ok' in result && result.ok) {
+                setSelectorCheck({
+                  chatList: result.chatList,
+                  chatItemCount: result.chatItemCount,
+                  input: result.input,
+                  send: result.send,
+                  search: result.search,
+                  messageList: result.messageList,
+                });
+              } else {
+                setSelectorCheck(null);
+              }
+            }}
+            className="w-full py-2 rounded-lg bg-surface-800 hover:bg-surface-700 text-gray-400 text-xs font-medium transition border border-white/5 mb-2"
+          >
+            Check selectors
+          </button>
+          {selectorCheck !== null && (
+            <div className="p-3 rounded-lg bg-surface-800/80 border border-white/5 text-xs space-y-1">
+              <div className="flex items-center gap-2">
+                <span className={selectorCheck.chatList ? 'text-green-400' : 'text-red-400'}>
+                  {selectorCheck.chatList ? '✓' : '✗'}
+                </span>
+                <span className="text-gray-400">Chat list</span>
+                {selectorCheck.chatList && (
+                  <span className="text-gray-500">({selectorCheck.chatItemCount} items)</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={selectorCheck.input ? 'text-green-400' : 'text-red-400'}>
+                  {selectorCheck.input ? '✓' : '✗'}
+                </span>
+                <span className="text-gray-400">Input</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={selectorCheck.send ? 'text-green-400' : 'text-red-400'}>
+                  {selectorCheck.send ? '✓' : '✗'}
+                </span>
+                <span className="text-gray-400">Send button</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={selectorCheck.messageList ? 'text-green-400' : 'text-amber-400'}>
+                  {selectorCheck.messageList ? '✓' : '○'}
+                </span>
+                <span className="text-gray-400">Message list</span>
+                <span className="text-gray-500">(when chat open)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={selectorCheck.search ? 'text-green-400' : 'text-gray-500'}>
+                  {selectorCheck.search ? '✓' : '○'}
+                </span>
+                <span className="text-gray-400">Search</span>
+              </div>
+            </div>
+          )}
+        </div>
+
         <button
           type="button"
           onClick={async () => {
             if (!window.botControl?.debugDOM) return;
             const info = await window.botControl.debugDOM();
             console.log('🔍 SnapBot DOM Debug:', JSON.stringify(info, null, 2));
-            // Also run the visible chats scanner
             const scan = await window.botControl.debugScan?.();
             if (scan) console.log('🔍 Visible Chats Scan:', JSON.stringify(scan, null, 2));
             alert(`Lists found: ${info?.roleLists ?? 0}\nURL: ${info?.url ?? '?'}\nTall divs: ${info?.tallDivs?.length ?? 0}\nScan items: ${scan?.totalListitems ?? '?'} raw, ${scan?.afterFilter ?? '?'} after filter\n\nCheck DevTools console for full output.`);

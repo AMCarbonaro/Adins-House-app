@@ -3,9 +3,11 @@ import { botState } from './bot-state';
 import { buildCharacterPrompt } from './characters';
 import type { WebContents } from 'electron';
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY || '',
-});
+function getGroqClient(): Groq {
+  return new Groq({
+    apiKey: botState.groqApiKey || process.env.GROQ_API_KEY || '',
+  });
+}
 
 const sleep = (ms: number) =>
   new Promise<void>((r) => setTimeout(r, ms));
@@ -32,12 +34,19 @@ function scriptGetChatList(): string {
     for (let i = 0; i < items.length; i++) {
       const el = items[i];
       var rect = el.getBoundingClientRect();
-      // Skip the stories row (taller than regular chat items ~74px)
       if (rect.height > 90) continue;
       var ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
       if (ariaLabel.indexOf('story') >= 0 || ariaLabel.indexOf('stories') >= 0) continue;
+      // Extract just the chat name (not status text)
+      var nameSpan = el.querySelector('span.nonIntl, span.mYSR9');
+      var chatName = nameSpan ? (nameSpan.textContent || '').trim() : '';
+      if (!chatName) {
+        var labelEl = el.querySelector('[aria-label]');
+        chatName = labelEl ? (labelEl.getAttribute('aria-label') || '').trim() : '';
+      }
+      if (!chatName) chatName = (el.textContent || '').trim().slice(0, 60);
       const unread = el.querySelector('[aria-label="Unread" i], [aria-label*="unread" i]');
-      result.push({ index: i, text: (el.textContent || '').trim().slice(0, 60), isUnread: !!unread });
+      result.push({ index: i, text: chatName, isUnread: !!unread });
     }
     return { ok: true, items: result };
   } catch (e) { return { ok: false, items: [], error: e.message }; }
@@ -66,7 +75,9 @@ function scriptHighlightChat(chatName: string): string {
     var el = null;
     var target = ${nameStr};
     for (var i = 0; i < items.length; i++) {
-      if ((items[i].textContent || '').trim().slice(0, 60).indexOf(target) === 0) { el = items[i]; break; }
+      var ns = items[i].querySelector('span.nonIntl, span.mYSR9');
+      var name = ns ? (ns.textContent || '').trim() : (items[i].textContent || '').trim().slice(0, 60);
+      if (name === target) { el = items[i]; break; }
     }
     if (!el) return { ok: false };
     el.setAttribute('data-snapbot-highlight', 'true');
@@ -110,7 +121,9 @@ function scriptClickChatByName(chatName: string): string {
     var el = null;
     var target = ${nameStr};
     for (var i = 0; i < items.length; i++) {
-      if ((items[i].textContent || '').trim().slice(0, 60).indexOf(target) === 0) { el = items[i]; break; }
+      var ns = items[i].querySelector('span.nonIntl, span.mYSR9');
+      var name = ns ? (ns.textContent || '').trim() : (items[i].textContent || '').trim().slice(0, 60);
+      if (name === target) { el = items[i]; break; }
     }
     if (!el) return { ok: false, error: 'chat not found in DOM' };
     (el.querySelector('[role="button"]') || el.querySelector('div:first-child') || el).click();
@@ -124,29 +137,35 @@ export function scriptGetLastMessage(): string {
   const s = getSelectors();
   const portalStr = JSON.stringify(s.portal || '#portal-container');
   const msgStr = JSON.stringify(s.messageContent || 'div[dir="auto"]');
+  const listSelStr = JSON.stringify(s.messageList || 'ul.ujRzj');
+  const bubbleSelStr = JSON.stringify(s.messageBubble || 'span[dir="auto"], span.ogn1z, .p8r1z span, div[dir="auto"]');
   return `
 (function() {
   try {
     const root = document.querySelector(${portalStr}) || document.body;
     var lastEl = null;
     var list = null;
-    var allUjRzj = document.body.querySelectorAll('ul.ujRzj');
-    if (allUjRzj.length > 0) {
-      list = allUjRzj[allUjRzj.length - 1];
-      if (list.children && list.children.length > 0) {
-        lastEl = list.children[list.children.length - 1];
+    var listSel = ${listSelStr};
+    var listParts = listSel.split(',').map(function(x) { return x.trim(); }).filter(Boolean);
+    for (var L = 0; L < listParts.length; L++) {
+      var all = document.body.querySelectorAll(listParts[L]);
+      if (all.length > 0) {
+        list = all[all.length - 1];
+        if (list.children && list.children.length > 0) {
+          lastEl = list.children[list.children.length - 1];
+          break;
+        }
       }
     }
-    if (!lastEl) {
-      list = root.querySelector('ul.ujRzj') || document.body.querySelector('ul.ujRzj');
-      if (list && list.children && list.children.length > 0) {
-        lastEl = list.children[list.children.length - 1];
-      }
+    if (!lastEl && listParts.length > 0) {
+      list = root.querySelector(listParts[0]) || document.body.querySelector(listParts[0]);
+      if (list && list.children && list.children.length > 0) lastEl = list.children[list.children.length - 1];
     }
     if (!lastEl) {
       var uls = document.body.querySelectorAll('ul');
       for (var u = uls.length - 1; u >= 0; u--) {
         if (uls[u].children && uls[u].children.length > 0) {
+          list = uls[u];
           lastEl = uls[u].children[uls[u].children.length - 1];
           break;
         }
@@ -154,8 +173,9 @@ export function scriptGetLastMessage(): string {
     }
     var lastText = '';
     var lastFromMe = false;
+    var bubbleSel = ${bubbleSelStr};
     if (lastEl) {
-      var msgNodes = lastEl.querySelectorAll('span[dir="auto"], span.ogn1z, .p8r1z span, div[dir="auto"]');
+      var msgNodes = lastEl.querySelectorAll(bubbleSel);
       if (msgNodes.length > 0) {
         var parts = [];
         for (var m = 0; m < msgNodes.length; m++) {
@@ -197,7 +217,7 @@ export function scriptGetLastMessage(): string {
       if (lastIsSnapButton || /new\\s*snap/i.test(lastText || '')) {
         var prevLi = lastEl.previousElementSibling;
         if (prevLi) {
-          var pNodes = prevLi.querySelectorAll('span[dir="auto"], span.ogn1z, .p8r1z span, div[dir="auto"]');
+          var pNodes = prevLi.querySelectorAll(bubbleSel);
           var prevTxt = '';
           if (pNodes.length > 0) {
             var pParts = [];
@@ -239,7 +259,7 @@ export function scriptGetLastMessage(): string {
         if (h && (h.textContent || '').trim().toLowerCase().indexOf('me') === 0) fromMe = true;
         if (!fromMe && li.firstElementChild && li.firstElementChild.tagName === 'HEADER' && (li.firstElementChild.textContent || '').trim().toLowerCase().indexOf('me') === 0) fromMe = true;
         if (!fromMe && li.querySelector && li.querySelector('span.nonIntl') && (li.querySelector('span.nonIntl').textContent || '').trim().toLowerCase() === 'me') fromMe = true;
-        var msgNodes = li.querySelectorAll ? li.querySelectorAll('span[dir="auto"], span.ogn1z, .p8r1z span, div[dir="auto"]') : [];
+        var msgNodes = li.querySelectorAll ? li.querySelectorAll(bubbleSel) : [];
         var txt = '';
         if (msgNodes.length > 0) {
           var parts = [];
@@ -354,7 +374,7 @@ function scriptClickSend(): string {
 const MAX_CONTEXT_CHARS = 3500;
 
 // Global rule: keep replies reserved and natural, not AI-like
-const RESERVED_RULE = `CRITICAL: Be reserved. Reply in 1 short sentence max—or a few words. Never write long paragraphs, multiple sentences, or enthusiastic AI-sounding text. Text like a real person: brief, casual, understated.`;
+const RESERVED_RULE = `Keep it natural. Reply in 1-2 short sentences like a real person texting. Be slightly reserved — don't overshare or sound overly enthusiastic, but don't be cold either. Match the energy of the conversation.`;
 
 interface RecentMessage {
   fromMe: boolean;
@@ -394,13 +414,13 @@ async function generateReply(
   const userPrompt = context
     ? `Last message from them: "${incomingMessage}"\n\nYour reply (message only):`
     : `They said: "${incomingMessage}"\n\nYour reply (message only):`;
-  const completion = await groq.chat.completions.create({
+  const completion = await getGroqClient().chat.completions.create({
     model: 'llama-3.1-8b-instant',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
-    max_tokens: 50,
+    max_tokens: 80,
     temperature: 0.4,
   });
   return (completion.choices[0]?.message?.content || '').trim();
@@ -417,8 +437,16 @@ function scriptScrollToPosition(scrollTop: number): string {
   return `
 (function() {
   try {
-    var vList = document.querySelector('.ReactVirtualized__Grid.ReactVirtualized__List')
-              || document.querySelector('[role="list"]');
+    var feed = document.querySelector('div[aria-label="Friends Feed"]');
+    var listSel = '.ReactVirtualized__Grid.ReactVirtualized__List, .ReactVirtualized_Grid.ReactVirtualized_List, [role="list"]';
+    var parts = listSel.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    var vList = null;
+    if (feed) {
+      for (var i = 0; i < parts.length; i++) { vList = feed.querySelector(parts[i]); if (vList) break; }
+    }
+    if (!vList) {
+      for (var j = 0; j < parts.length; j++) { vList = document.querySelector(parts[j]); if (vList) break; }
+    }
     if (!vList) return { ok: false, error: 'no list' };
     vList.scrollTop = ${scrollTop};
     return { ok: true, scrollTop: vList.scrollTop, scrollHeight: vList.scrollHeight };
@@ -431,21 +459,36 @@ function scriptGetVisibleChats(): string {
   return `
 (function() {
   try {
-    var vList = document.querySelector('.ReactVirtualized__Grid.ReactVirtualized__List')
-              || document.querySelector('[role="list"]');
+    var feed = document.querySelector('div[aria-label="Friends Feed"]');
+    var listSel = '.ReactVirtualized__Grid.ReactVirtualized__List, .ReactVirtualized_Grid.ReactVirtualized_List, [role="list"]';
+    var parts = listSel.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    var vList = null;
+    if (feed) {
+      for (var i = 0; i < parts.length; i++) { vList = feed.querySelector(parts[i]); if (vList) break; }
+    }
+    if (!vList) {
+      for (var j = 0; j < parts.length; j++) { vList = document.querySelector(parts[j]); if (vList) break; }
+    }
     if (!vList) return { ok: false, items: [], error: 'no list' };
     var items = vList.querySelectorAll('[role="listitem"]');
     var result = [];
     for (var i = 0; i < items.length; i++) {
       var el = items[i];
-      var text = (el.textContent || '').trim().slice(0, 60);
       var rect = el.getBoundingClientRect();
-      // Skip the stories row: it's taller than regular chats (~100px vs ~74px)
-      // and contains multiple user names mashed together
+      // Skip the stories row (taller than regular chat items ~74px)
       if (rect.height > 90) continue;
       // Skip items with story-related aria labels
       var ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
       if (ariaLabel.indexOf('story') >= 0 || ariaLabel.indexOf('stories') >= 0) continue;
+      // Extract just the chat name from span.nonIntl (not the status text)
+      var nameSpan = el.querySelector('span.nonIntl, span.mYSR9');
+      var text = nameSpan ? (nameSpan.textContent || '').trim() : '';
+      // Fallback: use aria-label on inner elements, or full textContent
+      if (!text) {
+        var labelEl = el.querySelector('[aria-label]');
+        text = labelEl ? (labelEl.getAttribute('aria-label') || '').trim() : '';
+      }
+      if (!text) text = (el.textContent || '').trim().slice(0, 60);
       // Get the virtual list index from the style (top offset)
       var top = parseInt(el.style.top, 10);
       var rowIndex = isNaN(top) ? i : Math.round(top / 70);
@@ -538,7 +581,7 @@ async function scrollToChatByName(webContents: WebContents, chatName: string): P
 
   // First check if it's already visible
   const check = await webContents.executeJavaScript(scriptGetVisibleChats());
-  if (check?.ok && check.items?.some((it: { text: string }) => it.text.indexOf(chatName.slice(0, 30)) === 0)) {
+  if (check?.ok && check.items?.some((it: { text: string }) => it.text === chatName)) {
     return true;
   }
 
@@ -549,12 +592,30 @@ async function scrollToChatByName(webContents: WebContents, chatName: string): P
     await webContents.executeJavaScript(scriptScrollToPosition(scrollPos));
     await sleep(400);
     const result = await webContents.executeJavaScript(scriptGetVisibleChats());
-    if (result?.ok && result.items?.some((it: { text: string }) => it.text.indexOf(chatName.slice(0, 30)) === 0)) {
+    if (result?.ok && result.items?.some((it: { text: string }) => it.text === chatName)) {
       return true;
     }
     scrollPos += SCROLL_STEP;
   }
   return false;
+}
+
+/**
+ * Click the back/home button to return to the chat list from an open conversation.
+ */
+function scriptGoBackToChatList(): string {
+  return `
+(function() {
+  try {
+    // Try Snapchat's back button
+    var back = document.querySelector('[aria-label="Back" i], [aria-label="Go back" i], button.cMnGO, a[href="/"]');
+    if (back) { back.click(); return { ok: true, method: 'back-button' }; }
+    // Try browser back
+    window.history.back();
+    return { ok: true, method: 'history-back' };
+  } catch (e) { return { ok: false, error: e.message }; }
+})();
+`;
 }
 
 async function runCycle(webContents: WebContents): Promise<void> {
@@ -577,10 +638,24 @@ async function runCycle(webContents: WebContents): Promise<void> {
       }
     }
 
-    // Apply range filter
+    // Re-scan fresh each cycle to catch new chats and order changes
+    const targetCount = botState.selectedChats?.to ?? 100;
+    const freshChats = await scanChatList(webContents, targetCount);
+    if (freshChats.length > 0) {
+      // Merge new chats into our known list (keep new ones, preserve cooldowns)
+      const knownSet = new Set(scannedChats);
+      for (const name of freshChats) {
+        if (!knownSet.has(name)) {
+          scannedChats.push(name);
+          knownSet.add(name);
+        }
+      }
+    }
+
+    // Apply range filter — use the fresh scan order
     const fromIdx = (botState.selectedChats?.from ?? 1) - 1;
-    const toIdx = botState.selectedChats?.to ?? scannedChats.length;
-    const chatQueue = scannedChats.slice(fromIdx, toIdx);
+    const toIdx = botState.selectedChats?.to ?? freshChats.length;
+    const chatQueue = freshChats.slice(fromIdx, toIdx);
 
     for (let qi = 0; qi < chatQueue.length; qi++) {
       const chatName = chatQueue[qi];
@@ -594,7 +669,7 @@ async function runCycle(webContents: WebContents): Promise<void> {
         // Scroll virtual list until this chat is visible
         const found = await scrollToChatByName(webContents, chatName);
         if (!found) {
-          botState.lastStatus.error = `Could not find: ${chatName.slice(0, 20)}`;
+          // Chat may have scrolled away — not fatal, skip it
           continue;
         }
 
@@ -608,6 +683,9 @@ async function runCycle(webContents: WebContents): Promise<void> {
         const msgResult = await webContents.executeJavaScript(scriptGetLastMessage());
         if (!msgResult?.ok) {
           if (msgResult?.error) botState.lastStatus.error = msgResult.error;
+          // Go back to chat list before continuing
+          await webContents.executeJavaScript(scriptGoBackToChatList());
+          await sleep(800);
           continue;
         }
 
@@ -616,7 +694,12 @@ async function runCycle(webContents: WebContents): Promise<void> {
           !msgResult.lastText?.trim() ||
           msgResult.isNewChat ||
           !(msgResult.recentMessages && msgResult.recentMessages.length);
-        if (msgResult.lastFromMe && !isEmptyChat) continue;
+        if (msgResult.lastFromMe && !isEmptyChat) {
+          // Already replied — go back to list
+          await webContents.executeJavaScript(scriptGoBackToChatList());
+          await sleep(800);
+          continue;
+        }
 
         let response: string;
         if (isEmptyChat) {
@@ -643,6 +726,9 @@ async function runCycle(webContents: WebContents): Promise<void> {
         if (!typeResult?.ok) {
           botState.lastStatus.lastCycle = typeResult?.error === 'no input' ? 'input box not found' : 'type failed';
           if (typeResult?.error) botState.lastStatus.error = typeResult.error;
+          // Go back to chat list
+          await webContents.executeJavaScript(scriptGoBackToChatList());
+          await sleep(800);
           continue;
         }
 
@@ -659,8 +745,15 @@ async function runCycle(webContents: WebContents): Promise<void> {
             if (sendResult?.error) botState.lastStatus.error = sendResult.error;
           }
         }
+
+        // Navigate back to the chat list before moving to next chat
+        await webContents.executeJavaScript(scriptGoBackToChatList());
+        await sleep(800);
       } catch (e) {
         botState.lastStatus.error = e instanceof Error ? e.message : String(e);
+        // Try to get back to chat list on error
+        try { await webContents.executeJavaScript(scriptGoBackToChatList()); } catch {}
+        await sleep(800);
       }
       if (!botState.enabled) break;
       await randomDelay(1000, 1500);

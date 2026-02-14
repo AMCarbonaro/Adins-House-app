@@ -8,6 +8,21 @@ All built installers and archives go into the **`release/`** folder (already in 
 
 ---
 
+## SnapBot (Groq API key) – one key for all users
+
+The app can use a **single Groq API key** that you embed at build time. Everyone who downloads the built app will use that key; they don’t need to add their own.
+
+1. **Get a key** at [console.groq.com/keys](https://console.groq.com/keys).
+2. **Put it in `.env`** in the project root (same folder as `package.json`):
+   ```env
+   GROQ_API_KEY=your_groq_api_key_here
+   ```
+3. **Build as usual** (`npm run build:mac`, `npm run build:win:x64`, or `npm run build:all`). The build reads `.env` and bakes the key into the app, so the installers you upload will have SnapBot working for all users.
+
+**Important:** Keep `.env` out of version control (it’s in `.gitignore`). The key is embedded in the built app, so all users share your Groq quota and rate limits. If the key is ever leaked or revoked, create a new key, put it in `.env`, and rebuild/re-release.
+
+---
+
 ## Building on macOS
 
 From the project root:

@@ -48,6 +48,7 @@
     "appId": "com.adinzander.app",
     "productName": "Step Bro",
     "icon": "build/icon.png",
+    "publish": null,
     "directories": {
       "output": "release"
     },
@@ -62,10 +63,7 @@
     ],
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
+      "target": ["dmg"],
       "category": "public.app-category.productivity",
       "icon": "build/icon.icns",
       "identity": null
