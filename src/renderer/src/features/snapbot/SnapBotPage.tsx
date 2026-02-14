@@ -21,6 +21,7 @@ export function SnapBotPage() {
   const [aestheticId, setAestheticId] = useState<string>('');
   const [characterEnabled, setCharacterEnabled] = useState(false);
   const [characterUpdated, setCharacterUpdated] = useState(false);
+  const [rangeSaved, setRangeSaved] = useState(false);
 
   useEffect(() => {
     if (!isElectron || !window.snapbot) return;
@@ -120,6 +121,8 @@ export function SnapBotPage() {
     await window.botControl.setState({
       selectedChats: { mode: 'range', from, to },
     });
+    setRangeSaved(true);
+    setTimeout(() => setRangeSaved(false), 2000);
   };
 
   const showCharacterUpdated = () => {
@@ -238,9 +241,13 @@ export function SnapBotPage() {
           <button
             type="button"
             onClick={handleSaveRange}
-            className="w-full py-2.5 rounded-lg bg-surface-700 hover:bg-surface-600 text-gray-300 text-sm font-medium transition"
+            className={`w-full py-2.5 rounded-lg text-sm font-medium transition ${
+              rangeSaved
+                ? 'bg-green-500/20 border border-green-500/40 text-green-400'
+                : 'bg-brand-500/20 border border-brand-500/30 hover:bg-brand-500/30 text-brand-300'
+            }`}
           >
-            Save range
+            {rangeSaved ? '✓ Updated' : 'Update Range'}
           </button>
         </div>
 
@@ -343,6 +350,22 @@ export function SnapBotPage() {
           that are currently loaded. Scroll down your chat list so those
           conversations load—then the bot can recognize and reply to them.
         </div>
+
+        <button
+          type="button"
+          onClick={async () => {
+            if (!window.botControl?.debugDOM) return;
+            const info = await window.botControl.debugDOM();
+            console.log('🔍 SnapBot DOM Debug:', JSON.stringify(info, null, 2));
+            // Also run the visible chats scanner
+            const scan = await window.botControl.debugScan?.();
+            if (scan) console.log('🔍 Visible Chats Scan:', JSON.stringify(scan, null, 2));
+            alert(`Lists found: ${info?.roleLists ?? 0}\nURL: ${info?.url ?? '?'}\nTall divs: ${info?.tallDivs?.length ?? 0}\nScan items: ${scan?.totalListitems ?? '?'} raw, ${scan?.afterFilter ?? '?'} after filter\n\nCheck DevTools console for full output.`);
+          }}
+          className="w-full mb-5 py-2 rounded-lg bg-surface-800 hover:bg-surface-700 text-gray-500 text-xs font-medium transition border border-white/5"
+        >
+          🔍 Debug DOM
+        </button>
 
         <div
           className={`p-4 rounded-xl text-sm border-l-4 ${

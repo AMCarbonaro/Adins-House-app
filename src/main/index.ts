@@ -3,7 +3,7 @@ import { app, BrowserWindow, BrowserView, ipcMain, nativeImage, globalShortcut, 
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { botState } from './bot-state';
-import { startBot, stopBot } from './bot';
+import { startBot, stopBot, resetPreload } from './bot';
 import {
   getCharacterData as getStoredCharacterData,
   setCharacterData as setStoredCharacterData,
@@ -227,7 +227,10 @@ app.whenReady().then(() => {
       }
     ) => {
       if (patch.enabled !== undefined) botState.enabled = patch.enabled;
-      if (patch.selectedChats) botState.selectedChats = patch.selectedChats;
+      if (patch.selectedChats) {
+        botState.selectedChats = patch.selectedChats;
+        resetPreload(); // re-scroll on next cycle to load new range
+      }
       if (patch.newChatReply !== undefined)
         botState.newChatReply = patch.newChatReply;
       if (patch.newSnapAction !== undefined)
@@ -241,6 +244,95 @@ app.whenReady().then(() => {
   );
 
   ipcMain.handle('bot:getStatus', () => ({ ...botState.lastStatus }));
+
+  ipcMain.handle('bot:debugScan', async () => {
+    if (!snapchatView || snapchatView.webContents.isDestroyed()) return { error: 'no view' };
+    return snapchatView.webContents.executeJavaScript(`
+(function() {
+  try {
+    var vList = document.querySelector('.ReactVirtualized__Grid.ReactVirtualized__List')
+              || document.querySelector('[role="list"]');
+    if (!vList) return { ok: false, error: 'no list element found', tried: ['.ReactVirtualized__Grid.ReactVirtualized__List', '[role="list"]'] };
+    var items = vList.querySelectorAll('[role="listitem"]');
+    var totalListitems = items.length;
+    var details = [];
+    var filtered = [];
+    for (var i = 0; i < Math.min(items.length, 25); i++) {
+      var el = items[i];
+      var text = (el.textContent || '').trim().slice(0, 60);
+      var rect = el.getBoundingClientRect();
+      var parent = el.parentElement;
+      var parentFlex = parent ? window.getComputedStyle(parent).flexDirection : 'n/a';
+      var parentOverflowX = parent ? window.getComputedStyle(parent).overflowX : 'n/a';
+      var parentClass = (parent?.className || '').slice(0, 80);
+      var ariaLabel = el.getAttribute('aria-label') || '';
+      var skipSmall = (rect.width > 0 && rect.height > 0 && rect.width < 120 && rect.height < 120);
+      var skipFlex = (parentFlex === 'row');
+      var skipStory = (ariaLabel.toLowerCase().indexOf('story') >= 0);
+      var skipped = skipSmall || skipFlex || skipStory;
+      details.push({
+        i: i, text: text.slice(0, 40), w: Math.round(rect.width), h: Math.round(rect.height),
+        parentFlex: parentFlex, parentOverflowX: parentOverflowX, parentClass: parentClass.slice(0, 40),
+        ariaLabel: ariaLabel.slice(0, 30), skipSmall: skipSmall, skipFlex: skipFlex, skipStory: skipStory, skipped: skipped
+      });
+      if (!skipped) filtered.push(text);
+    }
+    return { ok: true, totalListitems: totalListitems, afterFilter: filtered.length, details: details, filtered: filtered };
+  } catch(e) { return { ok: false, error: e.message }; }
+})();
+    `);
+  });
+
+  ipcMain.handle('bot:debugDOM', async () => {
+    if (!snapchatView || snapchatView.webContents.isDestroyed()) return { error: 'no view' };
+    return snapchatView.webContents.executeJavaScript(`
+(function() {
+  try {
+    var results = {};
+    // Check what role="list" elements exist
+    var lists = document.querySelectorAll('[role="list"]');
+    results.roleLists = lists.length;
+    results.roleListDetails = [];
+    for (var i = 0; i < Math.min(lists.length, 5); i++) {
+      var l = lists[i];
+      var items = l.querySelectorAll('[role="listitem"]');
+      results.roleListDetails.push({
+        tag: l.tagName,
+        classes: l.className.slice(0, 100),
+        childCount: l.children.length,
+        listitemCount: items.length,
+        parentClasses: (l.parentElement?.className || '').slice(0, 100),
+        sampleText: (l.textContent || '').slice(0, 200)
+      });
+    }
+    // Check for common chat list patterns
+    results.divLists = document.querySelectorAll('div[role="list"]').length;
+    results.ulElements = document.querySelectorAll('ul').length;
+    results.navElements = document.querySelectorAll('nav').length;
+    // Look for anything that looks like a chat list
+    var allDivs = document.querySelectorAll('div');
+    var tallDivs = [];
+    for (var d = 0; d < allDivs.length; d++) {
+      if (allDivs[d].children.length > 5 && allDivs[d].scrollHeight > 500) {
+        tallDivs.push({
+          tag: allDivs[d].tagName,
+          classes: allDivs[d].className.slice(0, 100),
+          childCount: allDivs[d].children.length,
+          scrollH: allDivs[d].scrollHeight,
+          firstChildTag: allDivs[d].children[0]?.tagName,
+          firstChildClasses: (allDivs[d].children[0]?.className || '').slice(0, 80),
+          firstChildText: (allDivs[d].children[0]?.textContent || '').slice(0, 60)
+        });
+      }
+      if (tallDivs.length >= 10) break;
+    }
+    results.tallDivs = tallDivs;
+    results.url = window.location.href;
+    return results;
+  } catch(e) { return { error: e.message }; }
+})();
+    `);
+  });
 
   ipcMain.handle('window:enterFullScreen', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {

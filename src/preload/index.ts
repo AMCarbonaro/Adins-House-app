@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('botControl', {
   setState: (patch: Record<string, unknown>) =>
     ipcRenderer.invoke('bot:setState', patch),
   getStatus: () => ipcRenderer.invoke('bot:getStatus'),
+  debugDOM: () => ipcRenderer.invoke('bot:debugDOM'),
+  debugScan: () => ipcRenderer.invoke('bot:debugScan'),
   getArchetypes: () => ipcRenderer.invoke('bot:getArchetypes'),
   getAesthetics: () => ipcRenderer.invoke('bot:getAesthetics'),
   getExampleCharacters: () => ipcRenderer.invoke('bot:getExampleCharacters'),
